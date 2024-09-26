@@ -1,0 +1,96 @@
+import cv2
+import numpy as np
+import pandas as pd
+from skimage.measure import label, regionprops
+import tqdm
+
+class gen_fil_csv:
+
+    def __init__(self, video_pth, position_pth, side_len):
+        self.video_path = video_pth
+        self.position_path = position_pth
+        self.side_length = side_len
+
+    def __call__(self, feature_list, output_pth):
+        video = cv2.VideoCapture(self.video_path)
+        image_list = []
+        frame_idx = 0 
+        column_name = ["frame", "centroid-0", "centroid-1"] + feature_list
+
+        with tqdm.tqdm(total=int(video.get(cv2.CAP_PROP_FRAME_COUNT))) as pbar:
+            while True:
+                ret, frame = video.read()
+                if not ret:
+                    break
+                if frame.dtype != np.uint8:
+                    frame = frame.astype(np.uint8)
+                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                particle_data = self.Process_img(gray_frame, feature_list, frame_idx)
+                frame_idx += 1
+                pbar.update(1)
+                image_list.append(particle_data)   ###
+            video.release()
+            cv2.destroyAllWindows()
+
+        particle_data = np.vstack(image_list)
+        particle_df = pd.DataFrame(particle_data, columns=column_name)
+        particle_df.to_csv(output_pth, index=False)
+
+    def Process_img(self, frame, feature_list, frame_idx):
+        position_df = pd.read_csv(self.position_path)
+        pos_x = np.array(
+            position_df[position_df["frame"] == frame_idx]["centroid-0"]
+        ) 
+        pos_y = np.array(
+            position_df[position_df["frame"] == frame_idx]["centroid-1"]
+        )
+        pos_zip = list(zip(pos_x, pos_y))
+
+        # create matrix to store data
+        particle_data_frame = np.zeros((len(pos_zip), len(feature_list)+3))
+
+        for idx, (x, y) in enumerate(pos_zip):
+            bottom_left_x = x - self.side_length / 2
+            bottom_left_y = y - self.side_length / 2
+            top_right_x = bottom_left_x + self.side_length
+            top_right_y = bottom_left_y + self.side_length
+
+            region = frame[
+                max(0,int(bottom_left_y)) : min(frame.shape[0],int(top_right_y)), max(0,int(bottom_left_x)) : min(frame.shape[1],int(top_right_x))
+            ]
+            # choose latter 15% value
+            threshold_value = min(
+                np.percentile(region.flatten(), 85), 254
+            )
+            _, thresholded_region = cv2.threshold(region, threshold_value, 255, cv2.THRESH_BINARY)
+
+            labeled_image = label(thresholded_region)
+            props = regionprops(labeled_image)
+            max_area = max([prop.area for prop in props])
+            max_area_regions = [prop for prop in props if prop.area == max_area][0]
+            max_area_prop = self.Get_region_prop(max_area_regions, feature_list)
+            particle_data_frame[idx,:] = np.array([frame_idx, *(x/frame.shape[1],y/frame.shape[0])] + max_area_prop)
+
+        for col_idx in range(3, len(feature_list)+3):
+            particle_data_frame[:, col_idx] /= np.abs(particle_data_frame[:, col_idx]).max()
+        return particle_data_frame 
+
+    def Get_region_prop(self, region, feature_list):
+        region_prop = []
+        prop_dispatch = {
+            "area": lambda prop: prop.area,
+            "perimeter": lambda prop: prop.perimeter,
+            "eccentricity": lambda prop: prop.eccentricity,
+            "orientation": lambda prop: prop.orientation,
+        }
+        for feature in feature_list:
+            if feature in prop_dispatch:
+                region_prop.append(prop_dispatch[feature](region))
+
+        return region_prop
+
+            
+            
+
+
+
