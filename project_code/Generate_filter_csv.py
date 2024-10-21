@@ -17,7 +17,7 @@ class gen_fil_csv:
         frame_idx = 0 
         column_name = ["frame", "centroid-0", "centroid-1"] + feature_list
 
-        with tqdm.tqdm(total=int(video.get(cv2.CAP_PROP_FRAME_COUNT))) as pbar:
+        with tqdm.tqdm(total=int(video.get(cv2.CAP_PROP_FRAME_COUNT)), desc="Process Img") as pbar:
             while True:
                 ret, frame = video.read()
                 if not ret:
@@ -34,6 +34,9 @@ class gen_fil_csv:
 
         particle_data = np.vstack(image_list)
         particle_df = pd.DataFrame(particle_data, columns=column_name)
+
+        ## remove duplicated particles
+        particle_df = particle_df.drop_duplicates(subset=particle_df.columns[-1], keep='first')
         particle_df.to_csv(output_pth, index=False)
 
     def Process_img(self, frame, feature_list, frame_idx):
@@ -65,7 +68,7 @@ class gen_fil_csv:
             _, thresholded_region = cv2.threshold(region, threshold_value, 255, cv2.THRESH_BINARY)
 
             labeled_image = label(thresholded_region)
-            props = regionprops(labeled_image)
+            props = regionprops(labeled_image, intensity_image=region)
             max_area = max([prop.area for prop in props])
             max_area_regions = [prop for prop in props if prop.area == max_area][0]
             max_area_prop = self.Get_region_prop(max_area_regions, feature_list)
@@ -73,6 +76,7 @@ class gen_fil_csv:
 
         for col_idx in range(3, len(feature_list)+3):
             particle_data_frame[:, col_idx] /= np.abs(particle_data_frame[:, col_idx]).max()
+        
         return particle_data_frame 
 
     def Get_region_prop(self, region, feature_list):
@@ -82,6 +86,8 @@ class gen_fil_csv:
             "perimeter": lambda prop: prop.perimeter,
             "eccentricity": lambda prop: prop.eccentricity,
             "orientation": lambda prop: prop.orientation,
+            "mean_intens": lambda prop: np.mean(prop.intensity_image),   ## mean_intensity  (bad)
+            "std_intens": lambda prop: np.std(prop.intensity_image)     ## std_intensity
         }
         for feature in feature_list:
             if feature in prop_dispatch:
@@ -89,8 +95,18 @@ class gen_fil_csv:
 
         return region_prop
 
-            
-            
+
+if __name__ == "__main__":
+    gen_detection = gen_fil_csv(
+        video_pth= "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi", 
+        position_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_detection(new).csv", 
+        side_len= 32
+        )
+    gen_detection(
+        feature_list= ["std_intens", "mean_intens"], 
+        output_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(weighted).csv"
+    )
+                
 
 
 

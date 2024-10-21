@@ -35,7 +35,7 @@ class process_traj:
         self.frame_range_list = [(start, min(start + self.len_sub, frame_length))
                                  for start in range(0, frame_length + 1, (self.len_sub-self.len_overlap))]
         
-    def __call__(self, checkpt_pth, len_thre= 1):
+    def __call__(self, checkpt_pth, frame_gap: int, dist_gap: float, feature_gap: float, len_thre= 1):
         ## generate graph list
         graph_list = []
         prediction_list = []
@@ -67,9 +67,54 @@ class process_traj:
                 coordinates[:, 1] = coordinates[:, 1]*1054
                 traj_coord.append((sorted_frames.cpu().numpy(), coordinates.cpu().numpy()))
                 pbar.update(1)
+        
+        torch.cuda.empty_cache()
+        ## link segments:  TODO
+        """ coord_head, coord_tail, frame_head, frame_tail = [], [], [], []
+        coord_head = np.vstack([traj[1][0, :2] for traj in traj_coord])
+        coord_tail = np.vstack([traj[1][-1, :2] for traj in traj_coord])
+        feature_head = np.vstack([traj[1][0, 2:-1] for traj in traj_coord])
+        feature_tail = np.vstack([traj[1][-1, 2:-1] for traj in traj_coord])
+        frame_head = np.array([traj[0][0] for traj in traj_coord]).reshape(-1, 1).astype(int)
+        frame_tail = np.array([traj[0][-1] for traj in traj_coord]).reshape(-1, 1).astype(int)
 
+        dist_matrix = np.linalg.norm(coord_head[:, np.newaxis, :] - coord_tail[np.newaxis, :, :], axis=-1)
+        frame_diff_matrix = frame_head - frame_tail.T   ### 
+        feature_diff_matrix = -1 * np.log( np.abs((feature_head - feature_tail * 1e4) / (1e4*feature_head) ))
+        
+        mask_link = ( (dist_matrix < dist_gap) & (frame_diff_matrix < frame_gap) & 
+                     (frame_diff_matrix > 0) & (feature_diff_matrix > feature_gap)
+                    ) ###
+        index_pair = np.where(mask_link)
+        index_pair = set(tuple(indices) for indices in zip(*index_pair))  ###
+        pruned_graph = nx.Graph()
+        pruned_graph.add_edges_from(index_pair)
+        trajectories = list(nx.connected_components(pruned_graph))
+
+        unique_index = set(value for tup in trajectories for value in tup)
+        lone_index = [value for value in np.arange(len(traj_coord)) if value not in unique_index]
+
+        new_traj = []
+        with tqdm(total=len(trajectories) + len(lone_index), desc="Link Coord") as pbar:
+            for link_index in trajectories:
+                new_traj_coord = np.vstack([traj_coord[i][1] for i in link_index])
+                new_traj_frame = np.vstack([traj_coord[i][0].reshape(-1, 1) for i in link_index])
+                sort_idx = np.argsort(new_traj_frame, axis=0).flatten()
+                new_traj_frame = new_traj_frame[sort_idx]
+                new_traj_coord = new_traj_coord[sort_idx]
+                new_traj.append((new_traj_frame, new_traj_coord))
+                pbar.update(1)
+
+            if len(lone_index) > 0:
+                for idx in lone_index:
+                    new_traj_coord = traj_coord[idx][1] 
+                    new_traj_frame = traj_coord[idx][0] 
+                    new_traj.append((new_traj_frame, new_traj_coord))
+                    pbar.update(1) """
+        
         return traj_coord
-    
+
+
     def generate_pre(self, frame_range, checkpt_pth):
         new_model = Classifier_model()
         classifier = BinaryClassifier(model=new_model, optimizer=Adam(lr=1e-3))
@@ -79,9 +124,7 @@ class process_traj:
 
         #mode='test'
         graph_Generator = Graph_Generator(
-            connectivity_radius=0.02, frame_test=frame_range,
-            num_particle_sim= 100, len_frame_sim= 1034, num_frame_sim= 60, 
-            D_sim= 0.1
+            connectivity_radius=0.02, frame_test=frame_range
         )
         graph = graph_Generator(self.particle_csv_path)
         pred = classifier(graph)
@@ -206,3 +249,21 @@ class compute_trajectories:
                 print(f"Error processing sender {sender}: {e}")
 
         return pruned_edges
+    
+
+
+if __name__ == "__main__":
+    gen_video = process_traj(
+        video_pth = "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi",
+        len_sub = 60,
+        len_overlap = 5,
+        prob_thre = 0.35,
+        particle_csv_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(new).csv",
+    )
+    gen_video(
+        len_thre = 1,
+        checkpt_pth = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(blink=2, num=50).pt",
+        frame_gap= 6, 
+        dist_gap= 10.0, 
+        feature_gap= 0.001
+    )
