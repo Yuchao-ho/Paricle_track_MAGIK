@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import torch
 from torch_geometric.data import Data
-import os
 from tqdm import tqdm
 import networkx as nx
+from collections import defaultdict
 from Generate_filter_csv import gen_fil_csv
 from Build_graph import Graph_Generator
 from MAGIK_model import Classifier_model
@@ -35,20 +35,25 @@ class process_traj:
         self.frame_range_list = [(start, min(start + self.len_sub, frame_length))
                                  for start in range(0, frame_length + 1, (self.len_sub-self.len_overlap))]
         
-    def __call__(self, checkpt_pth, frame_gap: int, dist_gap: float, feature_gap: float, len_thre= 1):
+    def __call__(self, checkpt_pth, connect_radius, len_thre= 1):
         ## generate graph list
-        graph_list = []
-        prediction_list = []
+        graph_list, prediction_list  = [], []
+        new_model = Classifier_model()
+        classifier = BinaryClassifier(model=new_model, optimizer=Adam(lr=1e-3))
+        classifier = classifier.create()
+        classifier.model.load_state_dict(torch.load(checkpt_pth, weights_only=True))
+        classifier.eval()
+
         with tqdm(total=len(self.frame_range_list), desc="Test Video") as pbar:
             for frame_range in self.frame_range_list:
-                graph, predictions = self.generate_pre(frame_range, checkpt_pth)
+                graph, predictions = self.generate_pre(frame_range, connect_radius, classifier)
                 graph_list.append(graph)
                 prediction_list.append(predictions)
                 pbar.update(1)
 
         ## combine graphs & predictions
-        combined_graph = self.combine_graph_list(graph_list)
-        combined_pre = np.concatenate(prediction_list, axis=0)
+        combined_graph, combined_pre = self.combine_graph_list(graph_list, prediction_list)
+        #combined_pre = np.concatenate(prediction_list, axis=0)
 
         ## build traj
         post_processor = compute_trajectories()
@@ -59,105 +64,110 @@ class process_traj:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             for traj in filter_trajectories:
                 frames = combined_graph.frames[list(traj)].to(device)
-                traj_tensor = torch.tensor(list(traj), device=device)
-                sorted_frames, sorted_idx = torch.sort(frames)
-                sorted_traj = traj_tensor[sorted_idx]
-                coordinates = combined_graph.x.to(device)[sorted_traj]
+                traj_tensor = torch.tensor(list(traj), device=device, dtype=torch.int64)
+                #sorted_frames, sorted_idx = torch.sort(frames)
+                #sorted_traj = traj_tensor[sorted_idx]
+                coordinates = combined_graph.x.to(device)[traj_tensor]
                 coordinates[:, 0] = coordinates[:, 0]*1314
                 coordinates[:, 1] = coordinates[:, 1]*1054
-                traj_coord.append((sorted_frames.cpu().numpy(), coordinates.cpu().numpy()))
+
+                """ unique_frames = []
+                unique_coordinates = []
+                last_frame = None
+                for i, frame in enumerate(sorted_frames):
+                    if last_frame is None:
+                        unique_frames.append(frame)
+                        unique_coordinates.append(coordinates[i])
+                        last_frame = frame
+                    
+                    elif frame != last_frame:
+                        last_coord = unique_coordinates[-1]
+                        frame_mask = sorted_frames == frame
+                        coord_frame = coordinates[frame_mask, :]
+                        distances = np.linalg.norm(coord_frame.cpu().numpy() - last_coord.cpu().numpy(), axis=1)
+                        min_distance_index = np.argmin(distances)
+                        unique_frames.append(frame)
+                        unique_coordinates.append(coord_frame[min_distance_index] )
+                        last_frame = frame
+
+                # Convert lists to tensors
+                unique_frames = torch.stack(unique_frames)
+                unique_coordinates = torch.stack(unique_coordinates)
+                traj_coord.append((unique_frames.cpu().numpy(), unique_coordinates.cpu().numpy())) """
+
+                traj_coord.append((frames.cpu().numpy(), coordinates.cpu().numpy()))
                 pbar.update(1)
         
         torch.cuda.empty_cache()
-        ## link segments:  TODO
-        """ coord_head, coord_tail, frame_head, frame_tail = [], [], [], []
-        coord_head = np.vstack([traj[1][0, :2] for traj in traj_coord])
-        coord_tail = np.vstack([traj[1][-1, :2] for traj in traj_coord])
-        feature_head = np.vstack([traj[1][0, 2:-1] for traj in traj_coord])
-        feature_tail = np.vstack([traj[1][-1, 2:-1] for traj in traj_coord])
-        frame_head = np.array([traj[0][0] for traj in traj_coord]).reshape(-1, 1).astype(int)
-        frame_tail = np.array([traj[0][-1] for traj in traj_coord]).reshape(-1, 1).astype(int)
-
-        dist_matrix = np.linalg.norm(coord_head[:, np.newaxis, :] - coord_tail[np.newaxis, :, :], axis=-1)
-        frame_diff_matrix = frame_head - frame_tail.T   ### 
-        feature_diff_matrix = -1 * np.log( np.abs((feature_head - feature_tail * 1e4) / (1e4*feature_head) ))
-        
-        mask_link = ( (dist_matrix < dist_gap) & (frame_diff_matrix < frame_gap) & 
-                     (frame_diff_matrix > 0) & (feature_diff_matrix > feature_gap)
-                    ) ###
-        index_pair = np.where(mask_link)
-        index_pair = set(tuple(indices) for indices in zip(*index_pair))  ###
-        pruned_graph = nx.Graph()
-        pruned_graph.add_edges_from(index_pair)
-        trajectories = list(nx.connected_components(pruned_graph))
-
-        unique_index = set(value for tup in trajectories for value in tup)
-        lone_index = [value for value in np.arange(len(traj_coord)) if value not in unique_index]
-
-        new_traj = []
-        with tqdm(total=len(trajectories) + len(lone_index), desc="Link Coord") as pbar:
-            for link_index in trajectories:
-                new_traj_coord = np.vstack([traj_coord[i][1] for i in link_index])
-                new_traj_frame = np.vstack([traj_coord[i][0].reshape(-1, 1) for i in link_index])
-                sort_idx = np.argsort(new_traj_frame, axis=0).flatten()
-                new_traj_frame = new_traj_frame[sort_idx]
-                new_traj_coord = new_traj_coord[sort_idx]
-                new_traj.append((new_traj_frame, new_traj_coord))
-                pbar.update(1)
-
-            if len(lone_index) > 0:
-                for idx in lone_index:
-                    new_traj_coord = traj_coord[idx][1] 
-                    new_traj_frame = traj_coord[idx][0] 
-                    new_traj.append((new_traj_frame, new_traj_coord))
-                    pbar.update(1) """
         
         return traj_coord
 
 
-    def generate_pre(self, frame_range, checkpt_pth):
-        new_model = Classifier_model()
-        classifier = BinaryClassifier(model=new_model, optimizer=Adam(lr=1e-3))
-        classifier = classifier.create()
-        classifier.model.load_state_dict(torch.load(checkpt_pth, weights_only=True))
-        classifier.eval()
-
+    def generate_pre(self, frame_range, connect_radius, classifier):
         #mode='test'
         graph_Generator = Graph_Generator(
-            connectivity_radius=0.02, frame_test=frame_range
+            connectivity_radius= connect_radius, frame_test=frame_range
         )
         graph = graph_Generator(self.particle_csv_path)
         pred = classifier(graph)
-        predictions = pred.detach().numpy() > self.prob_thre
+        #predictions = pred.detach().numpy() > self.prob_thre
+        predictions = pred.detach().numpy()
+        predictions = np.where(predictions < self.prob_thre, 0.0, predictions)  # TODO
+
         return graph, predictions
 
-    def combine_graph_list(self, graph_list):
-        start = graph_list[0]
+    def combine_graph_list(self, graph_list, prediction_list):
+        start_graph, start_pre = graph_list[0], prediction_list[0]
         with tqdm(total=len(graph_list)-1, desc="Combine Graph") as pbar:
             for idx in range(1, len(graph_list)):
-                start = self.combine_graph(start, graph_list[idx])
+                start_graph, start_pre = self.combine_graph(
+                    start_graph, graph_list[idx], start_pre, prediction_list[idx]
+                    )
                 pbar.update(1)
-        return start
+        return start_graph, start_pre
 
-    def combine_graph(self, graph1, graph2):
-        ## check shared nodes
-        x1, x2 = graph1.x, graph2.x
-        shared_nodes_mask = (x2.unsqueeze(1) == x1.unsqueeze(0)).all(-1).any(1)
-        shared_nodes_indices = torch.nonzero(shared_nodes_mask).squeeze()
-        combined_x = torch.cat([x1, x2[~shared_nodes_mask]], dim=0)
+    def combine_graph(self, graph1, graph2, pre1, pre2):
+        # check shared nodes
+        x1, x2 = graph1.x, graph2.x  
+        x1_pos, x2_pos = x1[:, :2], x2[:, :2]  ## TODO
+        shared_mask = (x2_pos.unsqueeze(1) == x1_pos.unsqueeze(0)).all(-1)
+        shared_x2_idx = shared_mask.any(1).nonzero(as_tuple=False).squeeze()
+        shared_x1_idx = shared_mask.any(0).nonzero(as_tuple=False).squeeze()
+        unique_x2_mask = ~shared_mask.any(1)
+        unique_x2_dict = {x2_idx: i for i, x2_idx in enumerate(unique_x2_mask.nonzero(as_tuple=False).squeeze().tolist())}
+        shared_nodes_dict = dict(zip(shared_x2_idx.tolist(), shared_x1_idx.tolist()))
 
-        ## shift indices of shared edges
+        combined_x = torch.cat([x1, x2[unique_x2_mask]], dim=0)
+
+        # Shift indices of shared edges
         num_nodes_graph1 = graph1.num_nodes
-        edge_index2_updated = graph2.edge_index.clone()
-        edge_index2_updated[0, :] += (num_nodes_graph1 - len(shared_nodes_indices))
-        edge_index2_updated[1, :] += (num_nodes_graph1 - len(shared_nodes_indices))
-        combined_edge_index = torch.cat([graph1.edge_index, edge_index2_updated], dim=1)
-        
-        ## combine edge_attr, distance
-        combined_edge_attr = torch.cat([graph1.edge_attr, graph2.edge_attr], dim=0)
-        combined_distance = torch.cat([graph1.distance, graph2.distance], dim=0)
+        edge_idx2 = graph2.edge_index.clone()
+        ## Create edge mask for shared edges
+        #edge_mask = ((edge_idx2.unsqueeze(-1) == shared_x2_idx).any(-1)).all(0)  maybe wrong
+        edge_mask0 = ((edge_idx2[0,:].unsqueeze(-1) == shared_x2_idx).any(-1))
+        edge_mask1 = ((edge_idx2[1,:].unsqueeze(-1) == shared_x2_idx).any(-1))
+        edge_mask = (edge_mask0) & (edge_mask1)
+        edge_idx2 = edge_idx2[:, ~edge_mask]
+        # Create a lookup tensor for shared nodes mapping
+        lookup = torch.arange(max(edge_idx2.max().item(), max(shared_nodes_dict.keys())) + 1)
+        for k, v in shared_nodes_dict.items():
+            lookup[k] = v
+        edge_idx2_mapped = lookup[edge_idx2]
 
-        ## check shared frames
+        not_in_dict_mask = (edge_idx2 == lookup[edge_idx2])  # True for new nodes
+
+        # Apply unique_x2_dict mapping and shift by num_nodes_graph1
+        mapped_values = torch.tensor([unique_x2_dict[idx.item()] for idx in edge_idx2[not_in_dict_mask].flatten()])
+        edge_idx2_mapped[not_in_dict_mask] = mapped_values.view(edge_idx2[not_in_dict_mask].shape) + num_nodes_graph1
+
+        # Combine edge indices with mapped values
+        combined_edge_index = torch.cat([graph1.edge_index, edge_idx2_mapped], dim=1)
+       
+        # combine edge_attr, distance
+        combined_edge_attr = torch.cat([graph1.edge_attr, graph2.edge_attr[~edge_mask]], dim=0)
+        combined_distance = torch.cat([graph1.distance, graph2.distance[~edge_mask]], dim=0)
+
+        # check shared frames
         frames1 = graph1.frames.clone()
         frames2 = graph2.frames.clone()
         frame_mask = (frames2.unsqueeze(1) == frames1.unsqueeze(0)).any(1)
@@ -173,18 +183,28 @@ class process_traj:
                 frames=combined_frames,
                 y=combined_y
             )
-        return combined_graph
+
+        # Combine predictions
+        combined_pre = np.concatenate((pre1, pre2[~edge_mask]), axis=0)
+        return combined_graph, combined_pre
     
 class compute_trajectories:
     def __call__(self, graph, predictions,):
         pruned_edges = self.prune_edges_batch(graph, predictions)
+        adj_dict = self.build_adjacency_dict(pruned_edges)
+        max_value = max(max(tup) for tup in pruned_edges)
+        # Use a more memory-efficient boolean array
+        id_mask = np.zeros(max_value + 1, dtype=np.bool_)
+        path_ls = []
+        with tqdm(total=max_value + 1, desc="Gen Traj") as pbar:
+            for idx in range(max_value + 1):
+                if not id_mask[idx]:
+                    path = self.recurr(adj_dict, idx, id_mask)
+                    if path:
+                        path_ls.append(path)
+                pbar. update(1)       
 
-        pruned_graph = nx.Graph()
-        pruned_graph.add_edges_from(pruned_edges)
-
-        trajectories = list(nx.connected_components(pruned_graph))
-
-        return trajectories
+        return path_ls
 
     def prune_edges_batch(self, graph, predictions, batch_size=100):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -197,7 +217,8 @@ class compute_trajectories:
             graph.frames[graph.edge_index[1]]
         ], dim=1)
 
-        senders = torch.unique(graph.edge_index[0])
+        #senders = torch.unique(graph.edge_index[0])  TODO
+        senders = torch.unique(graph.edge_index[0])  
         all_pruned_edges = set()  # Use a set to automatically remove duplicates
 
         try:
@@ -227,22 +248,29 @@ class compute_trajectories:
 
             try:
                 candidate = predictions[sender_mask]
+                candidate_mask = candidate > 0.0
                 frame_diff = frame_pairs[sender_mask, 1] - frame_pairs[sender_mask, 0]
                 
                 if not torch.any(candidate):
                     continue
                 
-                candidates_frame_diff = frame_diff[candidate]
+                candidates_frame_diff = frame_diff[candidate_mask] # TODO
                 if candidates_frame_diff.numel() == 0:
                     continue
                 
                 candidate_min_frame_diff = max(candidates_frame_diff.min(), 1)
-                final_mask = candidate & (frame_diff == candidate_min_frame_diff)
                 
+                final_mask = candidate_mask & (frame_diff == candidate_min_frame_diff) 
+                candidate = candidate[final_mask]
+                
+                max_index = torch.argmax(candidate)
                 candidate_edge_index = graph.edge_index[:, sender_mask][:, final_mask]
-                candidate_edge_index = candidate_edge_index.reshape(-1, 2)
-                if candidate_edge_index.numel() > 0 and candidate_edge_index.shape[0] == 1:
-                    edge = tuple(map(int, candidate_edge_index[0].cpu().numpy()))
+                #sorted_traj = torch.cat([candidate_edge_index[1, :], sender.unsqueeze(0)], dim=0)
+                #coordinates = graph.x.to("cuda")[sorted_traj]
+
+                #candidate_edge_index = candidate_edge_index.reshape(-1, 2)
+                if candidate_edge_index.numel() > 0 and candidate_edge_index.shape[1] >= 1:
+                    edge = tuple(candidate_edge_index[:,max_index].cpu().numpy())
                     pruned_edges.add(edge)  # Add the edge as a tuple to the set
 
             except Exception as e:
@@ -250,20 +278,37 @@ class compute_trajectories:
 
         return pruned_edges
     
+    def build_adjacency_dict(self, prune_edges):
+        adj_dict = defaultdict(list)
+        for i, j in prune_edges:
+            adj_dict[i].append(j)
+        return adj_dict
+ 
+    def recurr(self, adj_dict, start_node, id_mask):
+        stack = [start_node]
+        path = []
+
+        while stack:
+            node = stack.pop()
+            if not id_mask[node]:
+                path.append(node)
+                id_mask[node] = True
+                # Add neighbors in reverse order to maintain path sequence
+                stack.extend(adj_dict[node][::-1])
+
+        return path
 
 
 if __name__ == "__main__":
     gen_video = process_traj(
         video_pth = "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi",
-        len_sub = 60,
-        len_overlap = 5,
-        prob_thre = 0.35,
-        particle_csv_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(new).csv",
+        len_sub = 40,
+        len_overlap = 4,
+        prob_thre = 0.5,
+        particle_csv_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv",
     )
     gen_video(
-        len_thre = 1,
-        checkpt_pth = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(blink=2, num=50).pt",
-        frame_gap= 6, 
-        dist_gap= 10.0, 
-        feature_gap= 0.001
+        len_thre = 2,
+        checkpt_pth = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, new_D)(500).pt",
+        connect_radius = 35
     )

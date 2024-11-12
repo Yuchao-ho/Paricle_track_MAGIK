@@ -35,13 +35,18 @@ class process_traj:
         self.frame_range_list = [(start, min(start + self.len_sub, frame_length))
                                  for start in range(0, frame_length + 1, (self.len_sub-self.len_overlap))]
         
-    def __call__(self, checkpt_pth, len_thre= 1):
+    def __call__(self, checkpt_pth, connect_radius, len_thre= 1):
         ## generate graph list
-        graph_list = []
-        prediction_list = []
+        graph_list, prediction_list  = [], []
+        new_model = Classifier_model()
+        classifier = BinaryClassifier(model=new_model, optimizer=Adam(lr=1e-3))
+        classifier = classifier.create()
+        classifier.model.load_state_dict(torch.load(checkpt_pth, weights_only=True))
+        classifier.eval()
+
         with tqdm(total=len(self.frame_range_list), desc="Test Video") as pbar:
             for frame_range in self.frame_range_list:
-                graph, predictions = self.generate_pre(frame_range, checkpt_pth)
+                graph, predictions = self.generate_pre(connect_radius, frame_range, classifier)
                 graph_list.append(graph)
                 prediction_list.append(predictions)
                 pbar.update(1)
@@ -67,21 +72,15 @@ class process_traj:
                 coordinates[:, 1] = coordinates[:, 1]*1054
                 traj_coord.append((sorted_frames.cpu().numpy(), coordinates.cpu().numpy()))
                 pbar.update(1)
-
+        
+        torch.cuda.empty_cache()
         return traj_coord
-    
-    def generate_pre(self, frame_range, checkpt_pth):
-        new_model = Classifier_model()
-        classifier = BinaryClassifier(model=new_model, optimizer=Adam(lr=1e-3))
-        classifier = classifier.create()
-        classifier.model.load_state_dict(torch.load(checkpt_pth, weights_only=True))
-        classifier.eval()
 
+
+    def generate_pre(self, connect_radius, frame_range, classifier):
         #mode='test'
         graph_Generator = Graph_Generator(
-            connectivity_radius=0.02, frame_test=frame_range,
-            num_particle_sim= 100, len_frame_sim= 1034, num_frame_sim= 60, 
-            D_sim= 0.1
+            connectivity_radius= connect_radius, frame_test=frame_range
         )
         graph = graph_Generator(self.particle_csv_path)
         pred = classifier(graph)

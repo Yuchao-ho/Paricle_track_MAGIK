@@ -12,7 +12,7 @@ class tracker_train:
   def __init__(
       self, connectivity_radius=None, num_particle_sim=None, 
       len_frame_sim=None, num_frame_sim=None, 
-      D_sim=None, max_gap=None, prob_noise=None
+      D_sim=None, max_gap=None, prob_noise=None, prop_steady=None
       ):
     self.connectivity_radius = connectivity_radius
     self.num_particle_sim = num_particle_sim
@@ -21,6 +21,7 @@ class tracker_train:
     self.D_sim = D_sim
     self.max_gap = max_gap
     self.prob_noise = prob_noise
+    self.prop_steady = prop_steady
     
   def __call__(
       self, window_size, data_size, batch_size, 
@@ -30,7 +31,7 @@ class tracker_train:
     graph_Generator = Graph_Generator(
         connectivity_radius=self.connectivity_radius, num_particle_sim= self.num_particle_sim, 
         len_frame_sim= self.len_frame_sim, num_frame_sim= self.num_frame_sim, 
-        D_sim= self.D_sim, max_gap= self.max_gap, prob_noise= self.prob_noise
+        D_sim= self.D_sim, max_gap= self.max_gap, prob_noise= self.prob_noise, prop_steady = self.prop_steady
     )
     train_graph = graph_Generator(particle_feature_path)
 
@@ -55,13 +56,13 @@ class tracker_train:
 
 if __name__ == "__main__":
     trainer = tracker_train(
-        connectivity_radius=0.02,num_particle_sim= 100, 
-        len_frame_sim= 500, num_frame_sim= 60, 
-        D_sim= 0.1, max_gap= 4, prob_noise= 0.05
-    )
+        connectivity_radius=35, num_particle_sim= 100, 
+        len_frame_sim= 1300, num_frame_sim= 40, 
+        D_sim= 1.0, max_gap= 4, prob_noise= 0.05, prop_steady= 0.5 # (0.4)
+    )  #len_frame_sim : 1314
 
     trainer(
-        window_size= 6, data_size= 624, batch_size=30, max_epochs= 30, 
-        particle_feature_path= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(weighted).csv", 
-        checkpoint_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(weighted), num=100, gap=4).pt"
+        window_size= 6, data_size= 2048, batch_size=50, max_epochs= 25, 
+        particle_feature_path= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv", 
+        checkpoint_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, D=0.2)(500).pt"
     )

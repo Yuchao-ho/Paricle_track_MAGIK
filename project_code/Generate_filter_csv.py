@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import pandas as pd
 from skimage.measure import label, regionprops
+from scipy.spatial import cKDTree
+import random
 import tqdm
 
 class gen_fil_csv:
@@ -11,7 +13,7 @@ class gen_fil_csv:
         self.position_path = position_pth
         self.side_length = side_len
 
-    def __call__(self, feature_list, output_pth):
+    def __call__(self, tolerence, feature_list, output_pth):
         video = cv2.VideoCapture(self.video_path)
         image_list = []
         frame_idx = 0 
@@ -26,6 +28,9 @@ class gen_fil_csv:
                     frame = frame.astype(np.uint8)
                 gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 particle_data = self.Process_img(gray_frame, feature_list, frame_idx)
+                ## remove too near particles
+                particle_data = self.rm_duplicate(particle_data, tolerence)
+
                 frame_idx += 1
                 pbar.update(1)
                 image_list.append(particle_data)   ###
@@ -34,9 +39,9 @@ class gen_fil_csv:
 
         particle_data = np.vstack(image_list)
         particle_df = pd.DataFrame(particle_data, columns=column_name)
-
         ## remove duplicated particles
-        particle_df = particle_df.drop_duplicates(subset=particle_df.columns[-1], keep='first')
+        #particle_df = particle_df.drop_duplicates(subset=particle_df.columns[-1], keep='first')
+        
         particle_df.to_csv(output_pth, index=False)
 
     def Process_img(self, frame, feature_list, frame_idx):
@@ -72,10 +77,11 @@ class gen_fil_csv:
             max_area = max([prop.area for prop in props])
             max_area_regions = [prop for prop in props if prop.area == max_area][0]
             max_area_prop = self.Get_region_prop(max_area_regions, feature_list)
-            particle_data_frame[idx,:] = np.array([frame_idx, *(x/frame.shape[1],y/frame.shape[0])] + max_area_prop)
+            #particle_data_frame[idx,:] = np.array([frame_idx, *(x/frame.shape[1],y/frame.shape[0])] + max_area_prop)
+            particle_data_frame[idx,:] = np.array([frame_idx, *(x,y)] + max_area_prop)
 
-        for col_idx in range(3, len(feature_list)+3):
-            particle_data_frame[:, col_idx] /= np.abs(particle_data_frame[:, col_idx]).max()
+        """ for col_idx in range(3, len(feature_list)+3):
+            particle_data_frame[:, col_idx] /= np.abs(particle_data_frame[:, col_idx]).max() """
         
         return particle_data_frame 
 
@@ -87,7 +93,8 @@ class gen_fil_csv:
             "eccentricity": lambda prop: prop.eccentricity,
             "orientation": lambda prop: prop.orientation,
             "mean_intens": lambda prop: np.mean(prop.intensity_image),   ## mean_intensity  (bad)
-            "std_intens": lambda prop: np.std(prop.intensity_image)     ## std_intensity
+            "std_intens": lambda prop: np.std(prop.intensity_image),     ## std_intensity
+            "median_intens": lambda prop: np.median(prop.intensity_image)
         }
         for feature in feature_list:
             if feature in prop_dispatch:
@@ -95,16 +102,45 @@ class gen_fil_csv:
 
         return region_prop
 
+    def rm_duplicate(self, particle_data, tolerence):
+        particle_pos = particle_data[:, 1:3] #(x,y)
+        ## use cdk tree to find neighbors within tolerence
+        tree = cKDTree(particle_pos)
+        pos_pairs = tree.query_pairs(tolerence)
+        ## choose row index of deleted particles
+        del_row = self.pick_unique(pos_pairs)
+        filtered_particle_pos = np.delete(particle_data, del_row, axis=0)
+
+        return filtered_particle_pos
+
+    def pick_unique(self, pairs):
+        selected_elements = set()  
+        result = []
+        # randomize tuples
+        pairs_list = list(pairs)
+        random.shuffle(pairs_list)
+        for pair in pairs_list:
+            # pick unique ele
+            element_1, element_2 = pair
+            if element_1 not in selected_elements:
+                selected_elements.add(element_1)
+                result.append(element_1)
+            elif element_2 not in selected_elements:
+                selected_elements.add(element_2)
+                result.append(element_2)
+
+        return result
 
 if __name__ == "__main__":
     gen_detection = gen_fil_csv(
         video_pth= "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi", 
         position_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_detection(new).csv", 
-        side_len= 32
+        side_len= 20  #(20 best)
         )
     gen_detection(
-        feature_list= ["std_intens", "mean_intens"], 
-        output_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(weighted).csv"
+        tolerence= 10,  #(5 pixel best)
+        feature_list= ["mean_intens"], 
+        output_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv"
     )
                 
 

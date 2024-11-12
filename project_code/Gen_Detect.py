@@ -90,7 +90,7 @@ class gen_detect:
                 # Convert batch to tensor and move to GPU
                 batch_tensors = [torch.from_numpy(img).unsqueeze(0).unsqueeze(0).float().to(device) for img in batch_images]
                 torch_batch = torch.cat(batch_tensors, dim=0)
-                detections_batch = lodestar.detect(torch_batch, alpha=0.25, beta=0.75, mode="constant", cutoff=0.3)
+                detections_batch = lodestar.detect(torch_batch, alpha=0.2, beta=0.8, mode="constant", cutoff=0.2)
 
                 # Process detections and append to dataframe
                 for i, detections in enumerate(detections_batch):
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     gen_detection(
         len_dataset= 500, batch_size= 20, max_epochs= 30,
         video_pth= "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi", 
-        checkpth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_larger.pt", 
-        detect_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_detection(larger).csv"
+        checkpth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_multiple.pt", 
+        detect_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/lodestar_detection(new).csv"
     )
     

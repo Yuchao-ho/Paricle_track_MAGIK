@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import torch
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -24,7 +23,7 @@ class utilize_track:
         self.checkpt_path = checkpt_path
 
     def __call__(
-            self, mode, frame_gap, dist_gap, feature_gap, 
+            self, mode, connect_radius, 
             fps=None, frame_region=None, 
             frame_test=None, output_path=None
             ):  
@@ -39,9 +38,7 @@ class utilize_track:
             self.trajectories = combinator_traj(
                 checkpt_pth= self.checkpt_path,
                 len_thre= 1,
-                frame_gap= frame_gap,
-                dist_gap= dist_gap,
-                feature_gap= feature_gap
+                connect_radius= connect_radius
             )
 
         if mode == "gen_video":
@@ -57,7 +54,17 @@ class utilize_track:
             video.release()
 
         elif mode == "traj_msd":
-            pass  ## TODO 
+            filter_traj = [coordinates for _, coordinates in self.trajectories if 50 <= len(coordinates) <= 100]
+            msd = self.calculate_msd(filter_traj)
+            sd_values = msd[1]
+            # Plot the distribution using seaborn or matplotlib
+            plt.figure(figsize=(8, 5))
+            _, bins = np.histogram(sd_values, bins=30)  # Adjust number of bins as needed
+            plt.hist(sd_values, bins=bins, alpha=0.5)
+            plt.title(f'Distribution of Squared Displacements (Lag = {1})')
+            plt.xlabel('Squared Displacement')
+            plt.ylabel('Frequency')
+            plt.show()
         
         elif mode == "gen_distrib":
             frame_diff = []
@@ -65,11 +72,11 @@ class utilize_track:
                 if (frames[-1]-frames[0]) >= 3:
                     frame_diff.append(frames[-1]-frames[0])
                 
-            hist, bins = np.histogram(frame_diff, bins=10)  # Adjust number of bins as needed
+            _, bins = np.histogram(frame_diff, bins=10)  # Adjust number of bins as needed
             plt.hist(frame_diff, bins=bins, alpha=0.5)
-            plt.xlabel("Len of Tracking")
+            plt.xlabel("num of frames")
             plt.ylabel("Frequency")
-            plt.title("Len of Tracking (Overlap=1)")
+            plt.title("Len of Trajectories")
             plt.show()
 
                         
@@ -110,8 +117,8 @@ class utilize_track:
 
                 # Plot particle centroids, adjusted for crop region
                 for idx in range(selected_columns.shape[0]):
-                    x_coord = selected_columns[idx, 0] * 1314
-                    y_coord = selected_columns[idx, 1] * 1054
+                    x_coord = selected_columns[idx, 0] #* 1314
+                    y_coord = selected_columns[idx, 1] #* 1054
                     
                     # Only plot if the point is within the cropped bounds
                     if x_start <= x_coord <= x_end and y_start <= y_coord <= y_end:
@@ -122,8 +129,8 @@ class utilize_track:
                 
                 # Plot trajectories, adjusting for crop region
                 for frames, coordinates in self.trajectories:
-                    #if np.where(frames == frame_idx)[0].size > 0:  ### on time
-                        mask = frames.flatten() <= frame_idx   ### 
+                    if np.where(frames == frame_idx)[0].size > 0:  ### on time
+                        mask = (frame_test[0] <= frames.flatten()) & (frames.flatten() <= frame_idx)   ### 
                         coordinates_idx = coordinates[mask]
                         
                         # Adjust trajectory coordinates for the cropped region
@@ -136,6 +143,7 @@ class utilize_track:
                         if len(adjusted_coords) > 1:
                             adjusted_coords = np.array(adjusted_coords)
                             ax.plot(adjusted_coords[:, 0], adjusted_coords[:, 1], linewidth=1, color="blue")
+                            #ax.scatter(adjusted_coords[:, 0], adjusted_coords[:, 1], marker='*', s=5, edgecolor='blue', facecolor='none', linewidth=0.4, alpha=1)
 
                 ax.imshow(img, cmap="gray")
                 # Finalize the plot and save the image to the list
@@ -149,37 +157,71 @@ class utilize_track:
                 pbar.update(1)
         
         return track_img_list
-    
+
+
+    def calculate_msd(self, trajectories):
+        # Find the maximum number of time points
+        #num_particles = len(trajectories)
+        max_time_steps = min([len(traj) for traj in trajectories])  # Find minimum trajectory length for all particles
+
+        # Initialize array to store MSD values
+        msd = {lag: [] for lag in range(1, max_time_steps)}
+
+        # Iterate over each time lag
+        for lag in range(1, max_time_steps):
+            squared_displacements = []
+            
+            # Loop through each particle's trajectory
+            for traj in trajectories:
+                num_steps = len(traj)
+                
+                # Calculate squared displacement for each pair of positions separated by the time lag
+                for t in range(num_steps - lag):
+                    displacement = traj[t + lag] - traj[t]
+                    squared_displacement = np.sum(displacement**2)
+                    squared_displacements.append(squared_displacement)
+            
+            # Average the squared displacements for the current time lag
+            msd[lag] = np.mean(squared_displacements)
+        
+        return msd
+
+
 
 if __name__ == "__main__":
     gen_video = utilize_track(
         video_path = "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi",
-        len_sub = 60,
-        len_overlap = 5,  ## 5(most often)
-        prob_thre = 0.4,
+        len_sub = 30,
+        len_overlap = 3,  ## 5(most often)
+        prob_thre = 0.5,
         len_thre = 1,
-        checkpt_path = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(std_intens), num=100, gap=4).pt",
-        particle_csv_path= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(std_intens).csv",
+        checkpt_path = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, new_D)(500).pt",
+        particle_csv_path= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv",
     )
-    
-    gen_video(
-        mode= "gen_distrib", 
-        frame_gap= 10,
-        dist_gap= 50.0,
-        feature_gap= 0.7,
+   
+    """ gen_video(
+        mode= "gen_video", 
+        connect_radius= 25,  # pixel (20 best)
         fps= 1, 
-        frame_region= [(600, 800), (200, 500)],
-        frame_test=(200, 400), 
-        output_path="/home/user/Project_thesis/Particle_Hana/Video/traj_(Consec(weighted), num=100, gap=4).avi"
-    ) 
+        frame_region= [(200, 500), (700, 900)], 
+        frame_test=(220, 380), 
+        output_path="/home/user/Project_thesis/Particle_Hana/Video/traj_(Consec(mean), new_D, gap=4)(se2).avi"
+    )  """
 
     """ gen_video(
         mode= "gen_video", 
-        frame_gap= 10,
-        dist_gap= 50.0,
-        feature_gap= 0.7,
+        connect_radius= 25, #20
         fps= 1, 
-        frame_region= [(200, 500), (700, 900)],
-        frame_test=(200, 400), 
-        output_path="/home/user/Project_thesis/Particle_Hana/Video/traj_(Consec(std_intens), num=100, gap=4)(real_20).avi"
+        frame_region= [(600, 800), (200, 500)],
+        frame_test=(220, 380), 
+        output_path="/home/user/Project_thesis/Particle_Hana/Video/traj_(Consec(mean), new_D, gap=4)(se).avi"
     )  """
+
+    gen_video(
+        mode= "gen_video", 
+        connect_radius= 30, #20
+        fps= 1, 
+        frame_region= [(0, 1300), (0, 1000)],
+        frame_test=(200, 300), 
+        output_path="/home/user/Project_thesis/Particle_Hana/Video/traj_(Consec(mean), new_D, gap=4)(se3).avi"
+    ) 
