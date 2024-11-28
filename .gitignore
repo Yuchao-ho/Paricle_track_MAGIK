@@ -7,3 +7,5 @@ __pycache__/
 # Ignore environment files
 .env
 
+#ignore all _pycache_ folders
+**/_pycache_/
