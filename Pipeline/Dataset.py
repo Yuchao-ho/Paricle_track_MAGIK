@@ -50,7 +50,8 @@ class Tracing_Dataset(Dataset):
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            distance=edge_attr,
+            distance=edge_attr[:,0][:,None],
+            angle = edge_attr[:,1][:,None],
             y=ground_truth_edges,
         )
 
@@ -87,6 +88,7 @@ class RandomFlip: # (2)
 
         if np.random.randint(2):
             centered_features[:, 1] *= -1
+
 
         graph.x[:, :2] = centered_features + 0.5
         return graph

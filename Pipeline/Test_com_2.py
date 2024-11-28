@@ -3,11 +3,10 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 from tqdm import tqdm
-import networkx as nx
 from collections import defaultdict
-from Generate_filter_csv import gen_fil_csv
-from Build_graph import Graph_Generator
-from MAGIK_model import Classifier_model
+from Pipeline.Generate_filter_csv import gen_fil_csv
+from Pipeline.Build_graph import Graph_Generator
+from Pipeline.MAGIK_model import Classifier_model
 from deeplay import BinaryClassifier, Adam
 
 class process_traj:
@@ -35,7 +34,7 @@ class process_traj:
         self.frame_range_list = [(start, min(start + self.len_sub, frame_length))
                                  for start in range(0, frame_length + 1, (self.len_sub-self.len_overlap))]
         
-    def __call__(self, checkpt_pth, connect_radius, len_thre= 1):
+    def __call__(self, checkpt_pth, connect_radius, len_thre):
         ## generate graph list
         graph_list, prediction_list  = [], []
         new_model = Classifier_model()
@@ -65,8 +64,6 @@ class process_traj:
             for traj in filter_trajectories:
                 frames = combined_graph.frames[list(traj)].to(device)
                 traj_tensor = torch.tensor(list(traj), device=device, dtype=torch.int64)
-                #sorted_frames, sorted_idx = torch.sort(frames)
-                #sorted_traj = traj_tensor[sorted_idx]
                 coordinates = combined_graph.x.to(device)[traj_tensor]
                 coordinates[:, 0] = coordinates[:, 0]*1314
                 coordinates[:, 1] = coordinates[:, 1]*1054
@@ -302,13 +299,13 @@ class compute_trajectories:
 if __name__ == "__main__":
     gen_video = process_traj(
         video_pth = "/home/user/Project_thesis/Particle_Hana/Video/01_18_Cell7_PC3_cropped3_1_1000ms.avi",
-        len_sub = 40,
-        len_overlap = 4,
+        len_sub = 30,
+        len_overlap = 3,
         prob_thre = 0.5,
         particle_csv_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv",
     )
     gen_video(
         len_thre = 2,
-        checkpt_pth = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, new_D)(500).pt",
-        connect_radius = 35
+        checkpt_pth = "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, w_size=20)(500).pt",
+        connect_radius = 30
     )

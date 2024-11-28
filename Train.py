@@ -1,9 +1,9 @@
-from MAGIK_model import Classifier_model
+from Pipeline.Build_graph_re import Graph_Generator
+from Pipeline.Dataset import Tracing_Dataset, RandomRotation, RandomFlip
+from Pipeline.MAGIK_model import Classifier_model
 from deeplay import BinaryClassifier, Adam, Trainer
 import os
 import torch
-from Build_graph import Graph_Generator
-from Dataset import Tracing_Dataset, RandomRotation, RandomFlip
 from torchvision import transforms
 from torch_geometric.loader import DataLoader
 
@@ -57,12 +57,12 @@ class tracker_train:
 if __name__ == "__main__":
     trainer = tracker_train(
         connectivity_radius=35, num_particle_sim= 100, 
-        len_frame_sim= 1300, num_frame_sim= 40, 
-        D_sim= 1.0, max_gap= 4, prob_noise= 0.05, prop_steady= 0.5 # (0.4)
-    )  #len_frame_sim : 1314
+        len_frame_sim= 1300, num_frame_sim= 35,  
+        D_sim= 1.0, max_gap= 5, prob_noise= 0.05, prop_steady= 0.5 # (0.4)
+    )  #len_frame_sim : 1300, max_gap = 5
 
     trainer(
-        window_size= 6, data_size= 2048, batch_size=50, max_epochs= 25, 
-        particle_feature_path= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/particle_fea(mean_intens)(orient).csv", 
-        checkpoint_pth= "/home/user/Project_thesis/Particle_Hana/Cell7__ground_truth/model_(Consec(mean), num=50, D=0.2)(500).pt"
-    )
+        window_size= 20, data_size= 1024, batch_size=30, max_epochs= 25, 
+        particle_feature_path= "Cell7__ground_truth/particle_fea(mean_intens)(orient).csv", 
+        checkpoint_pth= "Cell7__ground_truth/model_(w_size=20, motion)(direct)(1).pt"
+    ) 
